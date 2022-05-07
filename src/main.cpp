@@ -20,11 +20,13 @@ void setup() {
   // Initialize serial
   Serial.begin(9600);
   #endif
+  
+  // Initialize station mode
+  WiFi.mode(WIFI_STA);
 
   // Initialize WiFi
   bool wifiManagerAutoConnected;
   WiFiManager wifiManager;
-  WiFi.mode(WIFI_STA);
   wifiManagerAutoConnected = wifiManager.autoConnect(CONFIGURATION_AP_NAME);
 
   // Restart if connection fails
@@ -73,4 +75,6 @@ void setup() {
 }
 
 void loop() {
+  // Handle OTA updates
+  ArduinoOTA.handle();
 }
