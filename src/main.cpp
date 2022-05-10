@@ -12,15 +12,37 @@
   #define DEBUG_PRINTLN(x) 
 #endif
 
+// Define input/output pins
+#define LDR_INPUT_PIN A0
+#define BTN_INPUT_PIN D5
+#define LED1_OUTPUT_PIN D1
+#define LED2_OUTPUT_PIN D4
+
 // Define behaviour constants
-#define CONFIGURATION_AP_NAME "RoomProjectAreaLights"
+#define CONFIGURATION_AP_NAME "RoomProjectLights"
+#define BUTTON_SHORT_DELAY 50 // ms
+#define BUTTON_LONG_DELAY 500 // ms
+
+// Global variables
+bool turnedOn = false;
 
 void setup() {
   #ifdef DEBUG
   // Initialize serial
   Serial.begin(9600);
   #endif
-  
+
+  // Initialize pins
+  pinMode(LDR_INPUT_PIN, INPUT);
+  pinMode(BTN_INPUT_PIN, INPUT_PULLUP);
+  pinMode(LED1_OUTPUT_PIN, OUTPUT);
+  pinMode(LED2_OUTPUT_PIN, OUTPUT);
+
+  // Set initial output state
+  analogWriteFreq(690);
+  analogWrite(LED1_OUTPUT_PIN, 0);
+  analogWrite(LED2_OUTPUT_PIN, 0);
+
   // Initialize station mode
   WiFi.mode(WIFI_STA);
 
@@ -74,7 +96,88 @@ void setup() {
   ArduinoOTA.begin();
 }
 
+void onButtonLongPress() {
+
+}
+
+void onButtonShortPress() {
+  turnedOn = !turnedOn;
+}
+
+void processButton() {
+  static int buttonValue, buttonLastValue;
+  static bool buttonShortPress, buttonLongPress;
+  static unsigned long lastButtonPress;
+
+  // Read input button state
+  buttonLastValue = buttonValue;
+  buttonValue = digitalRead(BTN_INPUT_PIN);
+  if(buttonValue != buttonLastValue && buttonValue == LOW) {
+    lastButtonPress = millis();
+  }
+
+  // Determine/perform button action
+  if(buttonValue == LOW) {
+    if((lastButtonPress + BUTTON_LONG_DELAY) <= millis()) {
+      buttonLongPress = true;
+      buttonShortPress = false;
+    } else if((lastButtonPress + BUTTON_SHORT_DELAY) <= millis()) {
+      buttonLongPress = false;
+      buttonShortPress = true;
+    }
+  }
+  else
+  {
+    // Check press flags and perform actions
+    if(buttonLongPress) {
+      onButtonLongPress();
+    }
+    else if(buttonShortPress) {
+      onButtonShortPress();
+    }
+    
+    // Reset press flag state
+    buttonLongPress = false;
+    buttonShortPress = false;
+  }
+}
+
+void processLights() {
+  static int step = 1;
+  static bool lastOnState = false;
+  static unsigned int lastBrightness = 0;
+  static unsigned long lastStep = millis();
+
+  if(lastOnState != turnedOn) {
+    if(turnedOn) {
+      analogWrite(LED1_OUTPUT_PIN, 255);
+      analogWrite(LED2_OUTPUT_PIN, 255);
+    } else {
+      analogWrite(LED1_OUTPUT_PIN, 0);
+      analogWrite(LED2_OUTPUT_PIN, 0);
+    }
+    lastOnState = turnedOn;
+  }
+
+  // Step the LED brightness
+  // if(millis() > (lastStep + 50)) {
+  //   analogWrite(LED1_OUTPUT_PIN, lastBrightness);
+  //   analogWrite(LED2_OUTPUT_PIN, lastBrightness);
+  //   lastBrightness += step;
+  //   if(lastBrightness <= 0 || lastBrightness >= 255) {
+  //     step *= -1;
+  //   }
+  //   lastStep = millis();
+  // }
+}
+
 void loop() {
+  // Process button
+  processButton();
+
+  // Process lights
+  processLights();
+
   // Handle OTA updates
   ArduinoOTA.handle();
 }
