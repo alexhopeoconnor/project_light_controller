@@ -1,6 +1,9 @@
+#include <FS.h>
 #include <Arduino.h>
 #include <ESP8266WiFi.h>
 #include <WiFiManager.h>
+#define WEBSERVER_H TRUE // Prevents compilation issues with ESPAsyncWebServer
+#include <ESPAsyncWebServer.h>
 #include <ArduinoOTA.h>
 
 #define DEBUG
@@ -12,6 +15,15 @@
   #define DEBUG_PRINTLN(x) 
 #endif
 
+// MIME definitions
+#define MIME_HTML "text/html"
+#define MIME_CSS "text/css"
+#define MIME_PNG "image/png"
+#define MIME_ICO "image/vnd.microsoft.icon"
+#define MIME_XML "application/xml"
+#define MIME_JSON "application/json"
+#define MIME_JAVASCRIPT "application/json"
+
 // Define input/output pins
 #define LDR_INPUT_PIN A0
 #define BTN_INPUT_PIN D5
@@ -19,20 +31,18 @@
 #define LED2_OUTPUT_PIN D4
 
 // Define behaviour constants
-#define CONFIGURATION_AP_NAME "RoomProjectLights"
+#define DEVICE_NAME "BedroomProjectAreaLights"
 #define BUTTON_SHORT_DELAY 50 // ms
 #define BUTTON_LONG_DELAY 500 // ms
+
+// Web server
+AsyncWebServer server(80);
 
 // Global variables
 bool turnedOn = false;
 
-void setup() {
-  #ifdef DEBUG
-  // Initialize serial
-  Serial.begin(9600);
-  #endif
-
-  // Initialize pins
+void setupIOPins() {
+// Initialize pins
   pinMode(LDR_INPUT_PIN, INPUT);
   pinMode(BTN_INPUT_PIN, INPUT_PULLUP);
   pinMode(LED1_OUTPUT_PIN, OUTPUT);
@@ -42,22 +52,9 @@ void setup() {
   analogWriteFreq(690);
   analogWrite(LED1_OUTPUT_PIN, 0);
   analogWrite(LED2_OUTPUT_PIN, 0);
+}
 
-  // Initialize station mode
-  WiFi.mode(WIFI_STA);
-
-  // Initialize WiFi
-  bool wifiManagerAutoConnected;
-  WiFiManager wifiManager;
-  wifiManagerAutoConnected = wifiManager.autoConnect(CONFIGURATION_AP_NAME);
-
-  // Restart if connection fails
-  if(!wifiManagerAutoConnected) {
-      ESP.restart();
-      return;
-  }
-
-  // Setup OTA
+void setupOTA() {
   ArduinoOTA.onStart([]() {
     String type;
     if (ArduinoOTA.getCommand() == U_FLASH) {
@@ -96,8 +93,178 @@ void setup() {
   ArduinoOTA.begin();
 }
 
-void onButtonLongPress() {
+String templateProcessor(const String& var) {
+  return var;
+}
 
+void handleNotFound(AsyncWebServerRequest *request) {
+    request->send(404, "text/plain", "Not found");
+}
+
+void sendResponseCode(AsyncWebServerRequest *request, int code, const String& content) {
+  AsyncWebServerResponse *response = request->beginResponse(code, MIME_HTML, content);
+  response->addHeader("Access-Control-Allow-Origin", "*");
+  request->send(response);
+}
+
+bool loadFromFS(AsyncWebServerRequest *request, const String& path, const String& dataType, bool templateResponse) {
+  // Check the specified path
+  if (SPIFFS.exists(path)) {
+
+    // Check the file can be read
+    File dataFile = SPIFFS.open(path, "r");
+    if (!dataFile) {
+        handleNotFound(request);
+        return false;
+    }
+    // Send the response
+    if(templateResponse) {
+      AsyncWebServerResponse *response = request->beginResponse(SPIFFS, path, dataType, false, templateProcessor);
+      response->addHeader("Access-Control-Allow-Origin", "*");
+      request->send(response);
+    } else {
+      request->send(SPIFFS, path, dataType);
+    }
+    dataFile.close();
+  } else {
+      handleNotFound(request);
+      return false;
+  }
+  return true;
+}
+
+bool loadHTMLFromFS(AsyncWebServerRequest *request, const String& path) {
+  return loadFromFS(request, path, MIME_HTML, true);
+}
+
+bool loadCSSFromFS(AsyncWebServerRequest *request, const String& path) {
+  return loadFromFS(request, path, MIME_CSS, false);
+}
+
+bool loadPNGFromFS(AsyncWebServerRequest *request, const String& path) {
+  return loadFromFS(request, path, MIME_PNG, false);
+}
+
+bool loadICOFromFS(AsyncWebServerRequest *request, const String& path) {
+  return loadFromFS(request, path, MIME_ICO, false);
+}
+
+bool loadXMLFromFS(AsyncWebServerRequest *request, const String& path) {
+  return loadFromFS(request, path, MIME_XML, false);
+}
+
+bool loadJSONFromFS(AsyncWebServerRequest *request, const String& path) {
+  return loadFromFS(request, path, MIME_JSON, true);
+}
+
+bool loadJSFromFS(AsyncWebServerRequest *request, const String& path) {
+  return loadFromFS(request, path, MIME_JAVASCRIPT, true);
+}
+
+bool setupServer() {
+  // Mount SPIFFS
+  if(SPIFFS.begin()) {
+    // Setup the web server page handlers
+    server.onNotFound(handleNotFound);
+    //server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) { loadHTMLFromFS(request, "/index.html"); });
+
+    // Setup other resource handlers
+    //server.on("/static/css/main.924db34f.css", HTTP_GET, [](AsyncWebServerRequest *request) { loadCSSFromFS(request, "/static/css/main.924db34f.css"); });
+    //server.on("/static/js/main.a355f3d3.js", HTTP_GET, [](AsyncWebServerRequest *request) { loadJSFromFS(request, "/static/js/main.a355f3d3.js"); });
+    server.on("/browserconfig.xml", HTTP_GET, [](AsyncWebServerRequest *request) { loadXMLFromFS(request, "/browserconfig.xml"); });
+    server.on("/favicon.ico", HTTP_GET, [](AsyncWebServerRequest *request) { loadICOFromFS(request, "/favicon.ico"); });
+
+    // Setup image handlers
+    server.on("/logo.png", HTTP_GET, [](AsyncWebServerRequest *request) { loadPNGFromFS(request, "/logo.png"); });
+    server.on("/android-icon-36x36.png", HTTP_GET, [](AsyncWebServerRequest *request) { loadPNGFromFS(request, "/android-icon-36x36.png"); });
+    server.on("/android-icon-48x48.png", HTTP_GET, [](AsyncWebServerRequest *request) { loadPNGFromFS(request, "/android-icon-48x48.png"); });
+    server.on("/android-icon-72x72.png", HTTP_GET, [](AsyncWebServerRequest *request) { loadPNGFromFS(request, "/android-icon-72x72.png"); });
+    server.on("/android-icon-96x96.png", HTTP_GET, [](AsyncWebServerRequest *request) { loadPNGFromFS(request, "/android-icon-96x96.png"); });
+    server.on("/android-icon-144x144.png", HTTP_GET, [](AsyncWebServerRequest *request) { loadPNGFromFS(request, "/android-icon-144x144.png"); });
+    server.on("/android-icon-192x192.png", HTTP_GET, [](AsyncWebServerRequest *request) { loadPNGFromFS(request, "/android-icon-192x192.png"); });
+    server.on("/apple-icon-57x57.png", HTTP_GET, [](AsyncWebServerRequest *request) { loadPNGFromFS(request, "/apple-icon-57x57.png"); });
+    server.on("/apple-icon-60x60.png", HTTP_GET, [](AsyncWebServerRequest *request) { loadPNGFromFS(request, "/apple-icon-60x60.png"); });
+    server.on("/apple-icon-72x72.png", HTTP_GET, [](AsyncWebServerRequest *request) { loadPNGFromFS(request, "/apple-icon-72x72.png"); });
+    server.on("/apple-icon-76x76.png", HTTP_GET, [](AsyncWebServerRequest *request) { loadPNGFromFS(request, "/apple-icon-76x76.png"); });
+    server.on("/apple-icon-114x114.png", HTTP_GET, [](AsyncWebServerRequest *request) { loadPNGFromFS(request, "/apple-icon-114x114.png"); });
+    server.on("/apple-icon-120x120.png", HTTP_GET, [](AsyncWebServerRequest *request) { loadPNGFromFS(request, "/apple-icon-120x120.png"); });
+    server.on("/apple-icon-144x144.png", HTTP_GET, [](AsyncWebServerRequest *request) { loadPNGFromFS(request, "/apple-icon-144x144.png"); });
+    server.on("/apple-icon-152x152.png", HTTP_GET, [](AsyncWebServerRequest *request) { loadPNGFromFS(request, "/apple-icon-152x152.png"); });
+    server.on("/apple-icon-180x180.png", HTTP_GET, [](AsyncWebServerRequest *request) { loadPNGFromFS(request, "/apple-icon-180x180.png"); });
+    server.on("/apple-icon-precomposed.png", HTTP_GET, [](AsyncWebServerRequest *request) { loadPNGFromFS(request, "/apple-icon-precomposed.png"); });
+    server.on("/apple-icon.png", HTTP_GET, [](AsyncWebServerRequest *request) { loadPNGFromFS(request, "/apple-icon.png"); });
+    server.on("/favicon-16x16.png", HTTP_GET, [](AsyncWebServerRequest *request) { loadPNGFromFS(request, "/favicon-16x16.png"); });
+    server.on("/favicon-32x32.png", HTTP_GET, [](AsyncWebServerRequest *request) { loadPNGFromFS(request, "/favicon-32x32.png"); });
+    server.on("/favicon-96x96.png", HTTP_GET, [](AsyncWebServerRequest *request) { loadPNGFromFS(request, "/favicon-96x96.png"); });
+    server.on("/ms-icon-70x70.png", HTTP_GET, [](AsyncWebServerRequest *request) { loadPNGFromFS(request, "/ms-icon-70x70.png"); });
+    server.on("/ms-icon-144x144.png", HTTP_GET, [](AsyncWebServerRequest *request) { loadPNGFromFS(request, "/ms-icon-144x144.png"); });
+    server.on("/ms-icon-150x150.png", HTTP_GET, [](AsyncWebServerRequest *request) { loadPNGFromFS(request, "/ms-icon-150x150.png"); });
+    server.on("/ms-icon-310x310.png", HTTP_GET, [](AsyncWebServerRequest *request) { loadPNGFromFS(request, "/ms-icon-310x310.png"); });
+
+    // Setup JSON resource handlers
+    server.on("/manifest.json", HTTP_GET, [](AsyncWebServerRequest *request) { loadJSONFromFS(request, "/manifest.json"); });
+
+    // Setup API handlers
+    // server.on("/gate-status", HTTP_GET, [] (AsyncWebServerRequest *request) { loadJSONFromFS(request, "/gate-status.json"); });
+    // server.on("/network-status", HTTP_GET, [] (AsyncWebServerRequest *request) { loadJSONFromFS(request, "/network-status.json"); });
+    server.on("/on", HTTP_GET, [](AsyncWebServerRequest *request) { 
+      turnedOn = true;
+      sendResponseCode(request, 200, "Turned on.");
+    });
+    server.on("/off", HTTP_GET, [](AsyncWebServerRequest *request) { 
+      turnedOn = false;
+      sendResponseCode(request, 200, "Turned off.");
+    });
+    // server.on("/close-gate", HTTP_GET, [](AsyncWebServerRequest *request) { 
+    //   sendGateSerialCommand("cg", NULL);
+    //   sendResponseCode(request, 200, "Closing the gate.");
+    // });
+    // server.on("/stop-gate", HTTP_GET, [](AsyncWebServerRequest *request) { 
+    //   sendGateSerialCommand("sg", NULL);
+    //   sendResponseCode(request, 200, "Stopping the gate.");
+    // });
+    server.begin();
+    return true;
+  }
+  return false;
+}
+
+void setup() {
+  #ifdef DEBUG
+  // Initialize serial
+  Serial.begin(9600);
+  #endif
+
+  // Setup IO pins
+  setupIOPins();
+  
+  // Initialize station mode
+  WiFi.mode(WIFI_STA);
+  WiFi.hostname(DEVICE_NAME);
+
+  // Initialize WiFi
+  WiFiManager wifiManager;
+  wifiManager.setConnectTimeout(180);
+  bool wifiManagerAutoConnected = wifiManager.autoConnect(DEVICE_NAME);
+
+  // Restart if connection fails
+  if(!wifiManagerAutoConnected) {
+      ESP.restart();
+      return;
+  }
+  WiFi.setAutoReconnect(true);
+
+  // Setup OTA
+  setupOTA();
+
+  // Init web server
+  setupServer();
+}
+
+void onButtonLongPress() {
+  // Disconnect from WiFi and restart
+  WiFi.disconnect();
+  ESP.restart();
 }
 
 void onButtonShortPress() {
