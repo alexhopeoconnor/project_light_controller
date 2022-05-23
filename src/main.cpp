@@ -1,4 +1,5 @@
 #include <FS.h>
+#include <EEPROM.h>
 #include <Arduino.h>
 #include <ESP8266WiFi.h>
 #include <WiFiManager.h>
@@ -31,15 +32,82 @@
 #define LED2_OUTPUT_PIN D4
 
 // Define behaviour constants
-#define DEVICE_NAME "BedroomProjectAreaLights"
+#define DEVICE_NAME "BedroomSpotlights"
 #define BUTTON_SHORT_DELAY 50 // ms
 #define BUTTON_LONG_DELAY 500 // ms
+
+// Config definition
+#define CONFIG_START 0
+#define CONFIG_VERSION "V1"
+#define PROJECT_NAME_SIZE 24 // Max host name length is 24
+typedef struct
+{
+  char version[5];
+  char project_name[PROJECT_NAME_SIZE];
+} configuration_type;
+
+// Global configuration instance
+configuration_type CONFIGURATION = {
+  CONFIG_VERSION,
+  DEVICE_NAME
+};
 
 // Web server
 AsyncWebServer server(80);
 
 // Global variables
 bool turnedOn = false;
+double brightness = 100.0;
+
+double getLightLevelPercentage() {
+  const int numVals = 10;
+  static int values[numVals];
+  static int lastValueIndex = 0;
+  static int actualValueCount = 0;
+
+  // Read the raw value
+  values[lastValueIndex] = analogRead(LDR_INPUT_PIN);
+  lastValueIndex++;
+  if(lastValueIndex >= numVals) {
+    lastValueIndex = 0;
+  }
+  if(actualValueCount < numVals) {
+    actualValueCount++;
+  }
+
+  // Average the raw value
+  double rawValue = 0;
+  for(int i = 0; i < actualValueCount; i++) {
+    rawValue += values[i];
+  }
+  rawValue = rawValue / actualValueCount;
+
+  // Return percentage
+  return (rawValue / 1023) * 100.0;
+}
+
+int loadConfig() 
+{
+  // Check the version, load (overwrite) the local configuration struct
+  if (EEPROM.read(CONFIG_START + 0) == CONFIG_VERSION[0] &&
+      EEPROM.read(CONFIG_START + 1) == CONFIG_VERSION[1] &&
+      EEPROM.read(CONFIG_START + 2) == CONFIG_VERSION[2]) {
+    for (unsigned int i = 0; i < sizeof(CONFIGURATION); i++) {
+      *((char*)&CONFIGURATION + i) = EEPROM.read(CONFIG_START + i);
+    }
+    return 1;
+  }
+  return 0;
+}
+
+void saveConfig() 
+{
+  // save the CONFIGURATION in to EEPROM
+  for (unsigned int i = 0; i < sizeof(CONFIGURATION); i++) {
+    EEPROM.write(CONFIG_START + i, *((char*)&CONFIGURATION + i));
+  }
+  EEPROM.commit();
+}
 
 void setupIOPins() {
 // Initialize pins
@@ -94,6 +162,15 @@ void setupOTA() {
 }
 
 String templateProcessor(const String& var) {
+  if(var == "PROJECT_NAME") {
+    return CONFIGURATION.project_name;
+  } else if(var == "TURNED_ON") {
+    return turnedOn ? "true" : "false";
+  } else if(var == "BRIGHTNESS") {
+    return String(brightness, 2);
+  } else if(var == "LIGHT_LEVEL") {
+    return String(getLightLevelPercentage(), 2);
+  }
   return var;
 }
 
@@ -166,11 +243,11 @@ bool setupServer() {
   if(SPIFFS.begin()) {
     // Setup the web server page handlers
     server.onNotFound(handleNotFound);
-    //server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) { loadHTMLFromFS(request, "/index.html"); });
+    server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) { loadHTMLFromFS(request, "/index.html"); });
 
     // Setup other resource handlers
-    //server.on("/static/css/main.924db34f.css", HTTP_GET, [](AsyncWebServerRequest *request) { loadCSSFromFS(request, "/static/css/main.924db34f.css"); });
-    //server.on("/static/js/main.a355f3d3.js", HTTP_GET, [](AsyncWebServerRequest *request) { loadJSFromFS(request, "/static/js/main.a355f3d3.js"); });
+    server.on("/static/css/main.fea5ea7f.css", HTTP_GET, [](AsyncWebServerRequest *request) { loadCSSFromFS(request, "/static/css/main.fea5ea7f.css"); });
+    server.on("/static/js/main.0f74000c.js", HTTP_GET, [](AsyncWebServerRequest *request) { loadJSFromFS(request, "/static/js/main.0f74000c.js"); });
     server.on("/browserconfig.xml", HTTP_GET, [](AsyncWebServerRequest *request) { loadXMLFromFS(request, "/browserconfig.xml"); });
     server.on("/favicon.ico", HTTP_GET, [](AsyncWebServerRequest *request) { loadICOFromFS(request, "/favicon.ico"); });
 
@@ -205,8 +282,7 @@ bool setupServer() {
     server.on("/manifest.json", HTTP_GET, [](AsyncWebServerRequest *request) { loadJSONFromFS(request, "/manifest.json"); });
 
     // Setup API handlers
-    // server.on("/gate-status", HTTP_GET, [] (AsyncWebServerRequest *request) { loadJSONFromFS(request, "/gate-status.json"); });
-    // server.on("/network-status", HTTP_GET, [] (AsyncWebServerRequest *request) { loadJSONFromFS(request, "/network-status.json"); });
+    server.on("/current-status", HTTP_GET, [] (AsyncWebServerRequest *request) { loadJSONFromFS(request, "/current-status.json"); });
     server.on("/on", HTTP_GET, [](AsyncWebServerRequest *request) { 
       turnedOn = true;
       sendResponseCode(request, 200, "Turned on.");
@@ -215,14 +291,6 @@ bool setupServer() {
       turnedOn = false;
       sendResponseCode(request, 200, "Turned off.");
     });
-    // server.on("/close-gate", HTTP_GET, [](AsyncWebServerRequest *request) { 
-    //   sendGateSerialCommand("cg", NULL);
-    //   sendResponseCode(request, 200, "Closing the gate.");
-    // });
-    // server.on("/stop-gate", HTTP_GET, [](AsyncWebServerRequest *request) { 
-    //   sendGateSerialCommand("sg", NULL);
-    //   sendResponseCode(request, 200, "Stopping the gate.");
-    // });
     server.begin();
     return true;
   }
@@ -235,24 +303,31 @@ void setup() {
   Serial.begin(9600);
   #endif
 
+  // Initialize config
+  EEPROM.begin(sizeof(CONFIGURATION));
+  if(!loadConfig()) {
+    saveConfig();
+  }
+
   // Setup IO pins
   setupIOPins();
   
   // Initialize station mode
   WiFi.mode(WIFI_STA);
   WiFi.hostname(DEVICE_NAME);
+  WiFi.setAutoReconnect(true);
 
   // Initialize WiFi
   WiFiManager wifiManager;
   wifiManager.setConnectTimeout(180);
-  bool wifiManagerAutoConnected = wifiManager.autoConnect(DEVICE_NAME);
+  wifiManager.setHostname(CONFIGURATION.project_name);
+  bool wifiManagerAutoConnected = wifiManager.autoConnect(CONFIGURATION.project_name);
 
   // Restart if connection fails
   if(!wifiManagerAutoConnected) {
       ESP.restart();
       return;
   }
-  WiFi.setAutoReconnect(true);
 
   // Setup OTA
   setupOTA();
