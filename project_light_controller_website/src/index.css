@@ -33,6 +33,12 @@ a {
   grid-template-columns: 110px auto;
 }
 
+.app-container header h1 {
+  font-size: 22px;
+  text-align: center;
+  vertical-align: middle;
+}
+
 .app-container header img {
   width: 100px;
   height: auto;
@@ -44,7 +50,16 @@ a {
       margin-left: 0%;
       margin-right: 0%;
      }
-     .app-container h1 {
-       font-size: 22px;
+     .app-container header {
+      display: grid;
+      grid-template-columns: 70px auto;
+    }
+     .app-container header h1 {
+       font-size: 18px;
      }
+     .app-container header img {
+      width: 60px;
+      height: auto;
+      justify-self: center;
+    }
 }

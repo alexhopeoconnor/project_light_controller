@@ -6,8 +6,10 @@
 #define WEBSERVER_H TRUE // Prevents compilation issues with ESPAsyncWebServer
 #include <ESPAsyncWebServer.h>
 #include <ArduinoOTA.h>
+#include <time.h>
+#include "timezone.h"
 
-#define DEBUG
+//#define DEBUG
 #ifdef DEBUG
   #define DEBUG_PRINT(x)     Serial.print (x)
   #define DEBUG_PRINTLN(x)  Serial.println (x)
@@ -25,6 +27,9 @@
 #define MIME_JSON "application/json"
 #define MIME_JAVASCRIPT "application/json"
 
+// HTTP STRINGS
+#define PARAM_BRIGHTNESS "brightness"
+
 // Define input/output pins
 #define LDR_INPUT_PIN A0
 #define BTN_INPUT_PIN D5
@@ -33,31 +38,51 @@
 
 // Define behaviour constants
 #define DEVICE_NAME "BedroomSpotlights"
+#define OTA_FLASH_DELAY 1000
 #define BUTTON_SHORT_DELAY 50 // ms
 #define BUTTON_LONG_DELAY 500 // ms
 
+// Define operation modes
+enum OperationMode {
+  OffMode,
+  OnMode,
+  AutoOnOffMode,
+  TimerOffMode
+};
+char* LEDModeNames[] = { "Off", "On", "Auto", "TimerOff" };
+
 // Config definition
 #define CONFIG_START 0
-#define CONFIG_VERSION "V1"
+#define CONFIG_VERSION "V3"
 #define PROJECT_NAME_SIZE 24 // Max host name length is 24
 typedef struct
 {
   char version[5];
   char project_name[PROJECT_NAME_SIZE];
+  double brightness;
+  OperationMode opMode;
 } configuration_type;
 
 // Global configuration instance
 configuration_type CONFIGURATION = {
   CONFIG_VERSION,
-  DEVICE_NAME
+  DEVICE_NAME,
+  80.0,
+  OffMode
 };
 
 // Web server
 AsyncWebServer server(80);
 
+// NPT
+const char *TIME_SERVER = "pool.ntp.org";
+int myTimeZone = AET;
+time_t now;
+
 // Global variables
 bool turnedOn = false;
-double brightness = 100.0;
+double brightness = 0.0;
+OperationMode opMode = OffMode;
 
 double getLightLevelPercentage() {
   const int numVals = 10;
@@ -86,6 +111,24 @@ double getLightLevelPercentage() {
   return (rawValue / 1023) * 100.0;
 }
 
+unsigned int getBrightnessPWM() {
+  return 255 * (brightness / 100.0);
+}
+
+void turnLightsOff() {
+  analogWrite(LED1_OUTPUT_PIN, 0);
+  analogWrite(LED2_OUTPUT_PIN, 0);
+  turnedOn = false;
+  brightness = 0.0;
+}
+
+void turnLightsOn() {
+  turnedOn = true;
+  brightness = CONFIGURATION.brightness;
+  analogWrite(LED1_OUTPUT_PIN, getBrightnessPWM());
+  analogWrite(LED2_OUTPUT_PIN, getBrightnessPWM());
+}
+
 int loadConfig() 
 {
   // Check the version, load (overwrite) the local configuration struct
@@ -110,7 +153,7 @@ void saveConfig()
 }
 
 void setupIOPins() {
-// Initialize pins
+  // Initialize pins
   pinMode(LDR_INPUT_PIN, INPUT);
   pinMode(BTN_INPUT_PIN, INPUT_PULLUP);
   pinMode(LED1_OUTPUT_PIN, OUTPUT);
@@ -133,9 +176,11 @@ void setupOTA() {
 
     // NOTE: if updating FS this would be the place to unmount FS using FS.end()
     DEBUG_PRINTLN("OTA: Start updating " + type);
+    turnLightsOff();
   });
   ArduinoOTA.onEnd([]() {
     DEBUG_PRINTLN("\nOTA: End");
+    turnLightsOff();
   });
   ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
     DEBUG_PRINT("Progress: ");
@@ -178,9 +223,16 @@ void handleNotFound(AsyncWebServerRequest *request) {
     request->send(404, "text/plain", "Not found");
 }
 
+void addResponseHeaders(AsyncWebServerResponse *response) {
+  response->addHeader("Access-Control-Allow-Origin", "*");
+  response->addHeader("Access-Control-Allow-Headers", "*");
+  response->addHeader("Access-Control-Allow-Credentials", "true");
+  response->addHeader("Access-Control-Allow-Methods", "GET,PUT,POST,DELETE");
+}
+
 void sendResponseCode(AsyncWebServerRequest *request, int code, const String& content) {
   AsyncWebServerResponse *response = request->beginResponse(code, MIME_HTML, content);
-  response->addHeader("Access-Control-Allow-Origin", "*");
+  addResponseHeaders(response);
   request->send(response);
 }
 
@@ -197,7 +249,7 @@ bool loadFromFS(AsyncWebServerRequest *request, const String& path, const String
     // Send the response
     if(templateResponse) {
       AsyncWebServerResponse *response = request->beginResponse(SPIFFS, path, dataType, false, templateProcessor);
-      response->addHeader("Access-Control-Allow-Origin", "*");
+      addResponseHeaders(response);
       request->send(response);
     } else {
       request->send(SPIFFS, path, dataType);
@@ -235,7 +287,7 @@ bool loadJSONFromFS(AsyncWebServerRequest *request, const String& path) {
 }
 
 bool loadJSFromFS(AsyncWebServerRequest *request, const String& path) {
-  return loadFromFS(request, path, MIME_JAVASCRIPT, true);
+  return loadFromFS(request, path, MIME_JAVASCRIPT, false);
 }
 
 bool setupServer() {
@@ -246,8 +298,8 @@ bool setupServer() {
     server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) { loadHTMLFromFS(request, "/index.html"); });
 
     // Setup other resource handlers
-    server.on("/static/css/main.fea5ea7f.css", HTTP_GET, [](AsyncWebServerRequest *request) { loadCSSFromFS(request, "/static/css/main.fea5ea7f.css"); });
-    server.on("/static/js/main.0f74000c.js", HTTP_GET, [](AsyncWebServerRequest *request) { loadJSFromFS(request, "/static/js/main.0f74000c.js"); });
+    server.on("/static/css/main.8f0491f5.css", HTTP_GET, [](AsyncWebServerRequest *request) { loadCSSFromFS(request, "/static/css/main.8f0491f5.css"); });
+    server.on("/static/js/main.dc10bcbe.js", HTTP_GET, [](AsyncWebServerRequest *request) { loadJSFromFS(request, "/static/js/main.dc10bcbe.js"); });
     server.on("/browserconfig.xml", HTTP_GET, [](AsyncWebServerRequest *request) { loadXMLFromFS(request, "/browserconfig.xml"); });
     server.on("/favicon.ico", HTTP_GET, [](AsyncWebServerRequest *request) { loadICOFromFS(request, "/favicon.ico"); });
 
@@ -283,13 +335,60 @@ bool setupServer() {
 
     // Setup API handlers
     server.on("/current-status", HTTP_GET, [] (AsyncWebServerRequest *request) { loadJSONFromFS(request, "/current-status.json"); });
-    server.on("/on", HTTP_GET, [](AsyncWebServerRequest *request) { 
-      turnedOn = true;
-      sendResponseCode(request, 200, "Turned on.");
+    server.on("/lights-on", HTTP_GET, [](AsyncWebServerRequest *request) { 
+      turnLightsOn();
+      sendResponseCode(request, 200, "Turned lights on.");
     });
-    server.on("/off", HTTP_GET, [](AsyncWebServerRequest *request) { 
-      turnedOn = false;
-      sendResponseCode(request, 200, "Turned off.");
+    server.on("/lights-off", HTTP_GET, [](AsyncWebServerRequest *request) { 
+      turnLightsOff();
+      sendResponseCode(request, 200, "Turned lights off.");
+    });
+    server.on("/time", HTTP_GET, [](AsyncWebServerRequest *request) {
+      struct tm *timeinfo;
+      time(&now);
+      timeinfo = localtime(&now);
+      int year = timeinfo->tm_year + 1900;
+      int month = timeinfo->tm_mon;
+      int day = timeinfo->tm_mday;
+      int hour = timeinfo->tm_hour;
+      int mins = timeinfo->tm_min;
+      int sec = timeinfo->tm_sec;
+      int day_of_week = timeinfo->tm_wday;
+      String responseFormatted = "Date = " + String(day) + "/" + String(month) + "/" + String(year) + "</br>";
+      responseFormatted = responseFormatted + " Time = " + String(hour) + ":" + String(mins) + ":" + String(sec) + "<br />";
+      responseFormatted = responseFormatted + "Day is " + String(DAYS_OF_WEEK[day_of_week]);
+      sendResponseCode(request, 200, responseFormatted);
+    });
+    server.on("/brightness", HTTP_POST, [](AsyncWebServerRequest *request){
+        String brightnessParam;
+        if (request->hasParam(PARAM_BRIGHTNESS, true)) {
+          // Parse brightness
+          brightnessParam = request->getParam(PARAM_BRIGHTNESS, true)->value();
+          double brightnessParsed = brightnessParam.toDouble();
+          if(brightnessParsed < 1.0) {
+            brightnessParsed = 1.0;
+          } else if(brightnessParsed > 100.0) {
+            brightnessParsed = 100.0;
+          }
+
+          // Update brightness
+          if(brightnessParsed != CONFIGURATION.brightness) {
+            CONFIGURATION.brightness = brightnessParsed;
+          } 
+          saveConfig();
+
+          // Update current brightness
+          if(turnedOn) {
+            brightness = CONFIGURATION.brightness;
+          }
+
+          // Return sucessful response
+          sendResponseCode(request, 200, "Brightness saved: " + String(brightness, 2));
+          return;
+        }
+
+        // Return bad request response
+        sendResponseCode(request, 400, "Invalid request parameters.");
     });
     server.begin();
     return true;
@@ -329,6 +428,9 @@ void setup() {
       return;
   }
 
+  // Configure ntp
+  configTime(myTimeZone * 3600, 0, TIME_SERVER);
+
   // Setup OTA
   setupOTA();
 
@@ -343,7 +445,11 @@ void onButtonLongPress() {
 }
 
 void onButtonShortPress() {
-  turnedOn = !turnedOn;
+  if(turnedOn) {
+    turnLightsOff();
+  } else {
+    turnLightsOn();
+  }
 }
 
 void processButton() {
@@ -385,32 +491,17 @@ void processButton() {
 }
 
 void processLights() {
-  static int step = 1;
-  static bool lastOnState = false;
-  static unsigned int lastBrightness = 0;
-  static unsigned long lastStep = millis();
+  static double lastBrightness = brightness;
 
-  if(lastOnState != turnedOn) {
+  // Check if brightness should be updated
+  if(lastBrightness != brightness) {
+    // Updated brightness if lights are turned on
     if(turnedOn) {
-      analogWrite(LED1_OUTPUT_PIN, 255);
-      analogWrite(LED2_OUTPUT_PIN, 255);
-    } else {
-      analogWrite(LED1_OUTPUT_PIN, 0);
-      analogWrite(LED2_OUTPUT_PIN, 0);
+      analogWrite(LED1_OUTPUT_PIN, getBrightnessPWM());
+      analogWrite(LED2_OUTPUT_PIN, getBrightnessPWM());
     }
-    lastOnState = turnedOn;
+    lastBrightness = brightness;
   }
-
-  // Step the LED brightness
-  // if(millis() > (lastStep + 50)) {
-  //   analogWrite(LED1_OUTPUT_PIN, lastBrightness);
-  //   analogWrite(LED2_OUTPUT_PIN, lastBrightness);
-  //   lastBrightness += step;
-  //   if(lastBrightness <= 0 || lastBrightness >= 255) {
-  //     step *= -1;
-  //   }
-  //   lastStep = millis();
-  // }
 }
 
 void loop() {

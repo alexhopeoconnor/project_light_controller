@@ -1,5 +1,5 @@
 {
-    "turnedOn": "%TURNED_ON%",
+    "turnedOn": %TURNED_ON%,
     "brightness": "%BRIGHTNESS%",
     "lightLevel": "%LIGHT_LEVEL%"
 }

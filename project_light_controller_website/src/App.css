@@ -1,0 +1,33 @@
+.App {
+  display: grid;
+  grid-gap: 10px;
+}
+
+.App .light-control {
+  grid-row-start: 2;
+  justify-content: center;
+}
+
+.App .navigation {
+  grid-row-start: 3;
+}
+
+.App .status-property {
+  margin-bottom: 5px;
+}
+
+.App .status-label {
+  font-weight: bold;
+  text-align: left;
+}
+
+.App .status-value {
+  font-style: italic;
+  text-align: left;
+}
+
+@media only screen and (max-width: 600px) {
+  .App h2 {
+    font-size: 16px;
+  }
+}
